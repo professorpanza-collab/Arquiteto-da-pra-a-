@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Arquiteto da Praça VR</title>
+<style>
+:root{--bg:#0f172a;--fg:#f8fafc;--btn:#f59e0b;--btnfg:#111827}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0f172a;--fg:#f8fafc}}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif}
+canvas{display:block}
+#ui{position:fixed;left:0;right:0;bottom:0;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;background:rgba(15,23,42,.8);font-size:15px}
+#vr{background:var(--btn);color:var(--btnfg);border:0;border-radius:10px;padding:12px 20px;font-size:16px;font-weight:700;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="ui"><button id="vr" disabled>Verificando VR…</button><span>Escolha Perímetro ou Área no painel. Aponte o controle (ou clique) nos quadrados do chão para colocar blocos de 1 m².</span></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const N=10,S=0.5,G=-3,W=1024,H=640;
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x9fd8f5);
+const cam=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,0.05,100);
+cam.position.set(0,1.6,0.8);cam.lookAt(0,0.6,-3.2);
+const rd=new THREE.WebGLRenderer({antialias:true});
+rd.setPixelRatio(Math.min(devicePixelRatio,2));rd.setSize(innerWidth,innerHeight);rd.xr.enabled=true;
+document.body.appendChild(rd.domElement);
+scene.add(new THREE.HemisphereLight(0xffffff,0x557755,1));
+const dl=new THREE.DirectionalLight(0xffffff,.6);dl.position.set(2,5,2);scene.add(dl);
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(40,40),new THREE.MeshLambertMaterial({color:0x7bbf6a}));
+floor.rotation.x=-Math.PI/2;scene.add(floor);
+const gh=new THREE.GridHelper(N*S,N,0xffffff,0xffffff);gh.position.set(0,.01,G);scene.add(gh);
+
+// células
+const box=new THREE.BoxGeometry(S*.94,.05,S*.94);
+const mE=new THREE.MeshLambertMaterial({color:0xd9c9a3}),mF=new THREE.MeshLambertMaterial({color:0x2563eb});
+const cells=[],fill=[];
+for(let i=0;i<N;i++){fill[i]=[];for(let j=0;j<N;j++){fill[i][j]=0;
+ const m=new THREE.Mesh(box,mE);m.position.set((i-N/2+.5)*S,.025,G+(j-N/2+.5)*S);m.userData={i,j};scene.add(m);cells.push(m);}}
+const contour=new THREE.Group();scene.add(contour);
+const eMat=new THREE.MeshBasicMaterial({color:0xff7a00});
+
+// painel
+const cv=document.createElement('canvas');cv.width=W;cv.height=H;const cx=cv.getContext('2d');
+const tex=new THREE.CanvasTexture(cv);
+const panel=new THREE.Mesh(new THREE.PlaneGeometry(3.2,2),new THREE.MeshBasicMaterial({map:tex}));
+panel.position.set(0,1.5,-6.2);scene.add(panel);
+
+// módulos e missões
+const MODS=[
+{nome:"Perímetro",ico:"📏",sub:"Cercar: contar a volta da figura",M:[
+ {t:"Cerque uma figura com perímetro de 8 m.",h:"Perímetro é a volta toda: conte os lados dos blocos que ficam no contorno.",ok:(a,p)=>p==8},
+ {t:"Monte um RETÂNGULO com perímetro de 12 m.",h:"Some os quatro lados. Dois lados mais dois lados deve dar 12.",ok:(a,p,r)=>r&&p==12},
+ {t:"Monte um RETÂNGULO com perímetro de 16 m e um lado de 3 m.",h:"Se um lado mede 3, os dois lados iguais somam 6. Quanto falta para 16?",ok:(a,p,r,w,h)=>r&&p==16&&(w==3||h==3)},
+ {t:"Monte um RETÂNGULO com perímetro de 18 m. Existe mais de uma resposta!",h:"Metade do perímetro é 9: procure dois números que somem 9.",ok:(a,p,r)=>r&&p==18},
+ {t:"Monte uma forma em L com perímetro de 14 m.",h:"Uma forma em L tem o mesmo perímetro do retângulo que a envolve. Tente um retângulo 3 × 4 com um canto faltando.",ok:(a,p,r)=>!r&&p==14},
+ {t:"Dobre o lado: o quadrado de lado 3 m tem perímetro 12 m. Monte um quadrado de lado 6 m.",h:"O lado 6 precisa de 6 blocos em cada lado.",ok:(a,p,r,w,h)=>r&&w==6&&h==6,
+  win:"Lado 3→6: o perímetro foi de 12 para 24 m. Ele dobrou, junto com o lado!"}]},
+{nome:"Área",ico:"🟦",sub:"Cobrir: contar os m² do piso",M:[
+ {t:"Cubra uma área de 6 m².",h:"Cada bloco cobre 1 m². Conte os blocos!",ok:(a)=>a==6},
+ {t:"Monte um retângulo de 3 m por 4 m.",h:"São 3 fileiras com 4 blocos cada. Quantos blocos no total?",ok:(a,p,r,w,h)=>r&&((w==3&&h==4)||(w==4&&h==3))},
+ {t:"Monte um RETÂNGULO com área de 10 m². Existe mais de uma resposta!",h:"Procure dois números que multiplicados deem 10.",ok:(a,p,r)=>r&&a==10},
+ {t:"Monte uma forma em L com área de 7 m².",h:"Pense em dois retângulos juntos: por exemplo, 2 × 3 mais 1 bloco.",ok:(a,p,r)=>!r&&a==7},
+ {t:"Monte uma forma que NÃO seja retângulo, com área de 11 m².",h:"Faça um retângulo e some ou tire blocos até chegar em 11.",ok:(a,p,r)=>!r&&a==11},
+ {t:"Dobre o lado: o quadrado de lado 2 m tem área 4 m². Monte um quadrado de lado 4 m.",h:"Lado 4 significa 4 blocos em cada lado.",ok:(a,p,r,w,h)=>r&&w==4&&h==4,
+  win:"Lado 2→4: a área foi de 4 para 16 m². Ela quadruplicou, enquanto o lado só dobrou!"}]}];
+let M=[],mod=-1,cur=0,fails=0,res=[[],[]],msg="",state="menu",showC=false,btns=[];
+
+function measure(){let a=0,p=0,x0=N,x1=-1,y0=N,y1=-1;const ed=[];
+ for(let i=0;i<N;i++)for(let j=0;j<N;j++)if(fill[i][j]){a++;x0=Math.min(x0,i);x1=Math.max(x1,i);y0=Math.min(y0,j);y1=Math.max(y1,j);
+  for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const u=i+dx,v=j+dy;
+   if(u<0||v<0||u>=N||v>=N||!fill[u][v]){p++;ed.push([i,j,dx,dy]);}}}
+ const w=x1-x0+1,h=y1-y0+1;return{a,p,w,h,r:a>0&&a==w*h,ed};}
+
+function redraw(){
+ const m=measure();
+ cells.forEach(c=>{const f=fill[c.userData.i][c.userData.j];c.material=f?mF:mE;c.scale.y=f?6:1;c.position.y=f?.15:.025;});
+ while(contour.children.length)contour.remove(contour.children[0]);
+ if(showC&&mod==0)m.ed.forEach(([i,j,dx,dy])=>{
+  const e=new THREE.Mesh(new THREE.BoxGeometry(dx?.05:S,.06,dy?.05:S),eMat);
+  e.position.set((i-N/2+.5)*S+dx*S/2,.33,G+(j-N/2+.5)*S+dy*S/2);contour.add(e);});
+ draw();}
+
+function wrap(t,x,y,w,lh){let l="";for(const wd of t.split(" ")){const s=l?l+" "+wd:wd;
+ if(cx.measureText(s).width>w&&l){cx.fillText(l,x,y);y+=lh;l=wd;}else l=s;}cx.fillText(l,x,y);return y+lh;}
+function btn(x,y,w,h,label,fn,col,fs){btns.push({x,y,w,h,fn});cx.fillStyle=col||"#f59e0b";cx.beginPath();cx.roundRect?cx.roundRect(x,y,w,h,18):cx.rect(x,y,w,h);cx.fill();
+ cx.fillStyle="#111827";cx.font="bold "+(fs||36)+"px sans-serif";cx.textAlign="center";cx.fillText(label,x+w/2,y+h/2+13);cx.textAlign="left";}
+const sum=a=>a.reduce((x,y)=>x+y,0);
+function goMenu(){reset();state="menu";mod=-1;msg="";}
+function start(k){mod=k;M=MODS[k].M;cur=0;res[k]=[];reset();state="play";msg="";}
+
+function draw(){btns=[];cx.fillStyle="#1e293b";cx.fillRect(0,0,W,H);cx.textAlign="left";
+ cx.fillStyle="#fbbf24";cx.font="bold 40px sans-serif";
+ if(state=="menu"){cx.fillText("Arquiteto da Praça",40,70);cx.fillStyle="#f8fafc";cx.font="34px sans-serif";
+  wrap("Escolha o que vai treinar hoje:",40,130,940,44);
+  MODS.forEach((d,k)=>{const x=40+k*500;btn(x,200,450,200,d.ico+" "+d.nome,()=>start(k),k?"#60a5fa":"#fb923c",46);
+   cx.fillStyle="#f8fafc";cx.font="28px sans-serif";wrap(d.sub,x+10,440,430,36);
+   if(res[k].length==d.M.length){cx.fillStyle="#4ade80";cx.fillText("Concluído: "+sum(res[k])+"/"+d.M.length*3+" ★",x+10,540);}});
+  tex.needsUpdate=true;return;}
+ if(state=="done"){cx.fillText("🏆 Relatório: "+MODS[mod].nome,40,70);cx.font="34px sans-serif";cx.fillStyle="#f8fafc";
+  res[mod].forEach((s,i)=>cx.fillText("Missão "+(i+1)+":  "+"★".repeat(s)+"☆".repeat(3-s),60,130+i*52));
+  cx.fillStyle="#fbbf24";cx.fillText("Total: "+sum(res[mod])+" de "+M.length*3+" estrelas",60,130+M.length*52+10);
+  btn(40,530,440,80,"Jogar de novo",()=>start(mod));btn(520,530,440,80,"Voltar ao menu",goMenu,"#94a3b8");tex.needsUpdate=true;return;}
+ cx.fillText(MODS[mod].nome+" — Missão "+(cur+1)+"/"+M.length,40,60);
+ btn(790,15,200,60,"Menu",goMenu,"#94a3b8",30);
+ cx.fillStyle="#f8fafc";cx.font="bold 42px sans-serif";let y=wrap(M[cur].t,40,140,940,52);
+ cx.font="34px sans-serif";cx.fillStyle=state=="ok"?"#4ade80":"#fca5a5";
+ if(msg)wrap(msg,40,y+30,940,44);
+ if(state=="ok"){cx.fillStyle="#fbbf24";cx.font="56px sans-serif";cx.fillText("★".repeat(res[mod][cur])+"☆".repeat(3-res[mod][cur]),40,430);
+  btn(330,520,360,90,cur==M.length-1?"Ver relatório":"Próxima missão",()=>{cur++;reset();if(cur>=M.length)state="done";else{state="play";msg="";}});}
+ else if(mod==0){btn(30,520,300,90,"Verificar",check,"#4ade80");btn(350,520,330,90,showC?"Ocultar contorno":"Ver contorno",()=>{showC=!showC;},"#fb923c",34);btn(700,520,290,90,"Limpar",()=>{reset();msg="";});}
+ else{btn(100,520,380,90,"Verificar",check,"#4ade80");btn(540,520,380,90,"Limpar",()=>{reset();msg="";});}
+ tex.needsUpdate=true;}
+
+function reset(){for(let i=0;i<N;i++)for(let j=0;j<N;j++)fill[i][j]=0;fails=0;showC=false;}
+function check(){const m=measure(),q=M[cur];
+ if(m.a&&q.ok(m.a,m.p,m.r,m.w,m.h)){res[mod][cur]=Math.max(1,3-fails);msg=q.win||"Muito bem, arquiteto! Você acertou.";state="ok";}
+ else{fails++;msg=fails<2?"Quase! Confira a contagem e tente de novo.":(mod==0?"Sua figura tem perímetro de "+m.p+" m. ":"Sua figura tem área de "+m.a+" m². ")+"Dica: "+q.h;}}
+
+// interação
+const ray=new THREE.Raycaster();
+function act(){const hits=ray.intersectObjects([panel,...cells]);if(!hits.length)return;const h=hits[0];
+ if(h.object===panel){const px=h.uv.x*W,py=(1-h.uv.y)*H;
+  for(const b of btns)if(px>=b.x&&px<=b.x+b.w&&py>=b.y&&py<=b.y+b.h){b.fn();break;}}
+ else if(state=="play"){const{i,j}=h.object.userData;fill[i][j]^=1;msg="";}
+ redraw();}
+rd.domElement.addEventListener('pointerdown',e=>{if(rd.xr.isPresenting)return;
+ ray.setFromCamera(new THREE.Vector2(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1),cam);act();});
+const tmp=new THREE.Matrix4();
+for(let k=0;k<2;k++){const c=rd.xr.getController(k);
+ c.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(),new THREE.Vector3(0,0,-8)]),new THREE.LineBasicMaterial({color:0xffffff})));
+ c.addEventListener('selectstart',()=>{tmp.identity().extractRotation(c.matrixWorld);
+  ray.ray.origin.setFromMatrixPosition(c.matrixWorld);ray.ray.direction.set(0,0,-1).applyMatrix4(tmp);act();});
+ scene.add(c);}
+
+// botão VR
+const vr=document.getElementById('vr');
+if(navigator.xr){navigator.xr.isSessionSupported('immersive-vr').then(ok=>{
+ vr.disabled=!ok;vr.textContent=ok?"Entrar em VR":"VR indisponível neste navegador";
+ if(ok)vr.onclick=async()=>{const s=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});
+  rd.xr.setReferenceSpaceType('local-floor');await rd.xr.setSession(s);document.getElementById('ui').style.display='none';
+  s.addEventListener('end',()=>document.getElementById('ui').style.display='flex');};});}
+else vr.textContent="Modo tela (sem VR)";
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();rd.setSize(innerWidth,innerHeight);});
+rd.setAnimationLoop(()=>rd.render(scene,cam));
+redraw();
+</script>
+</body>
+</html>
